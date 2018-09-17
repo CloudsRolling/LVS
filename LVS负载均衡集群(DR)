@@ -1,0 +1,97 @@
+
+-----构建DR模式的LVS群集-----
+
+
+--client---------------------LVS------------------------WEB1---------------------------------WEB2----------------------NFS--
+2.2.2.100               eth0:2.2.2.10               eth0:2.2.2.20                       eth0:2.2.2.30            192.168.1.200
+                        eth0:0:2.2.2.2              lo：0:2.2.2.2                       lo:0:2.2.2.2
+
+
+一、配置LVS调度器
+
+1、配置IP和VIP
+1）配置IP
+[root@localhost ~]# cat /etc/sysconfig/network-scripts/ifcfg-eth0
+2）配置VIP
+[root@localhost ~]# cp /etc/sysconfig/network-scripts/ifcfg-eth0 /etc/sysconfig/network-scripts/ifcfg-eth0:0
+[root@localhost ~]# cat /etc/sysconfig/network-scripts/ifcfg-eth0:0
+添加：
+DEVICE=eth0:0
+ONBOOT=yes
+IPADDR=2.2.2.2
+NETMASK=255.0.0.0
+[root@localhost ~]# service network restart
+
+2、调整响应参数
+[root@localhost ~]# vim /etc/sysctl.conf
+添加：
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.eth0.send_redirects = 0
+参数的含义是发送重定向，0表示关闭此项功能。
+[root@localhost ~]# sysctl -p
+
+3、安装并配置ipvsadm
+[root@localhost ~]# rpm -ihv /mnt/Packages/ipvsadm-1.26-2.el6.x86_64.rpm
+[root@localhost ~]# service ipvsadm stop //清除原有策略
+[root@localhost ~]# ipvsadm -A -t 2.2.2.2:80 -s rr //A虚拟服务器、t为VIP、rr轮询
+[root@localhost ~]# ipvsadm -a -t 2.2.2.2:80 -r 2.2.2.20 -g -w 1 //a真实服务器
+[root@localhost ~]# ipvsadm -a -t 2.2.2.2:80 -r 2.2.2.30 -g -w 1
+[root@localhost ~]# service ipvsadm save //保存策略
+[root@localhost ~]# chkconfig --add ipvsadm
+[root@localhost ~]# chkconfig ipvsadm on
+
+二、配置WEB节点服务器
+1、配置IP地址
+1）设置IP
+[root@localhost ~]# vim /etc/sysconfig/network-scripts/ifcfg-eth0
+2）设置VIP
+[root@localhost ~]# cp /etc/sysconfig/network-scripts/ifcfg-lo /etc/sysconfig/network-scripts/ifcfg-lo:0
+[root@localhost ~]# vim /etc/sysconfig/network-scripts/ifcfg-lo:0
+修改：
+DEVICE=lo:0
+IPADDR=2.2.2.2
+NETMASK=255.255.255.255
+ONBOOT=yes
+3）添加路由
+[root@localhost ~]# route add -host 2.2.2.2 dev lo:0 //-host为标记为一台主机
+[root@localhost ~]# echo "route add -host 2.2.2.2 dev lo:0" >> /etc/rc.local
+
+2、调整响应参数
+[root@localhost ~]# vim /etc/sysctl.conf
+添加：
+net.ipv4.conf.all.arp_ignore = 1
+arp_ignore:定义了网卡在响应外部ARP请求时候的响应级别
+0：默认值，不管哪块网卡接收到了ARP请求，只要发现本机有这个MAC都给与响应
+1：总是使用最合适的网卡来响应，一个主机有多块网卡，其中一块网卡接收到了ARP请求，发现所请求的MAC是本机另一块网卡的，这
+个时候接收到ARP请求的这块网卡就一定不响应，只有发现请求的MAC是自己的才给与响应。
+net.ipv4.conf.all.arp_announce = 2
+net.ipv4.conf.default.arp_ignore = 1
+net.ipv4.conf.default.arp_announce = 2
+net.ipv4.conf.lo.arp_ignore = 1
+net.ipv4.conf.lo.arp_announce = 2
+arp_announce定义了网卡在向外宣告自己的MAC-IP时候的限制级别
+有三个值：
+0：默认值，不管哪块网卡接收到了ARP请求，只要发现本机有这个MAC都给与响应
+1：尽量避免响应ARP请求中MAC不是本网卡的，一个主机有多块网卡，其中一块网卡接收到了ARP请求，发现所请求的MAC是本机另一
+块网卡的，这个时候接收到ARP请求的这块网卡就尽量避免响应
+2：总是使用最合适的网卡来响应，一个主机有多块网卡，其中一块网卡接收到了ARP请求，发现所请求的MAC是本机另一块网卡的，这
+个时候接收到ARP请求的这块网卡就一定不响应，只有发现请求的MAC是自己的才给与响应。
+[root@localhost ~]# sysctl -p
+
+3、配置http服务
+[root@localhost ~]# echo "welcome to 2.2.2.20 web server" > /var/www/html/index.html
+[root@localhost ~]# service httpd restart
+
+三、验证：
+1、客户端访问：
+[root@localhost ~]# http://2.2.2.2/
+2、在LVS上查看：
+[root@localhost ~]# ipvsadm -Lnc
+[root@localhost ~]# ipvsadm -Ln
+
+
+
+
+
+-
