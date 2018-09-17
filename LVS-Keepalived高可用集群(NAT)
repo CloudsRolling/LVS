@@ -1,0 +1,163 @@
+LEA-6-LVS-NAT+Keepalived搞可用集群
+-------client-----------------主LVS-----------------从LVS--------------------WEB1--------------------WEB2-------------
+2.2.2.250                   2.2.2.10                  2.2.2.20
+                            192.168.1.10              192.168.1.20          192.168.1.101       192.168.1.102
+外网漂移IP：2.2.2.2
+内网漂移IP：192.168.1.1
+
+一、配置LVS服务器(主-从两台)
+1、配置IP
+[root@localhost ~]# vim /etc/sysconfig/network-scripts/ifcfg-eth0
+[root@localhost ~]# vim /etc/sysconfig/network-scripts/ifcfg-eth1
+[root@localhost ~]# service network restart
+
+2、调整响应参数（主-从配置一样）
+[root@localhost ~]# vim /etc/sysctl.conf
+修改：
+net.ipv4.ip_forward = 1
+添加：
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.eth0.send_redirects = 0
+[root@localhost ~]# sysctl -p
+
+3、安装并配置ipvsadm（主-从配置一样）
+[root@localhost ~]# rpm -ihv /mnt/Packages/ipvsadm-1.26-2.el6.x86_64.rpm
+[root@localhost ~]# service ipvsadm stop
+[root@localhost ~]# ipvsadm -A -t 2.2.2.2:80 -s rr
+[root@localhost ~]# ipvsadm -a -t 2.2.2.2:80 -r 192.168.1.101:80 -m -w 1
+[root@localhost ~]# ipvsadm -a -t 2.2.2.2:80 -r 192.168.1.102:80 -m -w 1
+[root@localhost ~]# service ipvsadm save
+[root@localhost ~]# chkconfig ipvsadm on
+[root@localhost ~]# service ipvsadm start
+
+二、配置Keepalived服务器
+
+4、安装keepalived软件（主-从配置一样）
+[root@localhost ~]# yum -y install kernel-devel openssl-devel popt-devel
+[root@localhost ~]# tar -zxvf keepalived-1.2.13.tar.gz -C /usr/src/
+[root@localhost ~]# cd /usr/src/keepalived-1.2.13/
+[root@localhost keepalived-1.2.13]# ./configure --prefix=/ --with-kernel-dir=/usr/src/kernels/2.6.32-431.el6.x86_64
+[root@localhost keepalived-1.2.13]# make && make install
+[root@localhost ~]# /etc/init.d/keepalived start
+[root@localhost ~]# netstat -anp | grep keepalived
+[root@localhost ~]# chkconfig --add keepalived
+[root@localhost ~]# chkconfig keepalived on
+
+4.1、主服务器配置
+[root@localhost ~]# cp /etc/keepalived/keepalived.conf /etc/keepalived/keepalived.conf_bak
+[root@localhost ~]# vim /etc/keepalived/keepalived.conf
+修改：
+global_defs {
+router_id LVS_DEVEL_R1
+}
+vrrp_instance VI_1 {
+state MASTER
+interface eth0
+virtual_router_id 1
+priority 100
+advert_int 1
+authentication {
+auth_type PASS
+auth_pass 1111
+}
+virtual_ipaddress {
+2.2.2.2
+}
+}
+vrrp_instance VI_1 {
+state MASTER
+interface eth1
+virtual_router_id 1
+priority 100
+advert_int 1
+authentication {
+auth_type PASS
+auth_pass 1111
+}
+virtual_ipaddress {
+192.168.1.1
+}
+}
+virtual_server 2.2.2.2 80 {
+delay_loop 15
+lb_algo rr
+lb_kind NAT
+protocol TCP
+real_server 192.168.1.101 80 {
+weight 1
+TCP_CHECK {
+connect_port 80
+connect_timeout 3
+nb_get_retry 3
+delay_before_retry 4
+}
+}
+real_server 192.168.1.102 80 {
+weight 1
+TCP_CHECK {
+connect_port 80
+connect_timeout 3
+nb_get_retry 3
+delay_before_retry 4
+}
+}
+}
+[root@localhost ~]# service keepalived restart
+[root@localhost ~]# ip add show dev eth0
+
+4.2、从服务器配置
+[root@localhost ~]# cp /etc/keepalived/keepalived.conf /etc/keepalived/keepalived.conf_bak
+[root@localhost ~]# vim /etc/keepalived/keepalived.conf
+修改：
+global_defs {
+router_id LVS_DEVEL_R2
+}
+vrrp_instance VI_1 {
+state BACKUP
+priority 99
+......
+---其他参数与主服务器保持一致----
+}
+[root@localhost ~]# service keepalived restart
+[root@localhost ~]# ip add show dev eth0
+
+三、配置WEB节点服务器
+
+1、配置IP地址
+1）设置IP
+[root@localhost ~]# vim /etc/sysconfig/network-scripts/ifcfg-eth0
+2、配置http服务
+WEB-1:
+[root@localhost ~]# echo "welcome to 192.168.1.101 web server" > /var/www/html/index.html
+[root@localhost ~]# service httpd restart
+[root@localhost ~]# chkconfig --add httpd
+[root@localhost ~]# chkconfig httpd on
+WEB-2:
+[root@localhost ~]# echo "welcome to 192.168.1.102 web server" > /var/www/html/index.html
+[root@localhost ~]# service httpd restart
+[root@localhost ~]# chkconfig --add httpd
+[root@localhost ~]# chkconfig httpd on
+
+三、验证：
+一）使用ping命令
+客户端：ping -t 2.2.2.2
+断开主LVS的网卡，查看客户端的ping情况。
+重启主LVS的网卡，查看客户端的ping情况。
+二）客户端
+1、访问：
+http://2.2.2.2/
+在主LVS上查看：
+[root@localhost ~]# ipvsadm -Lnc
+2、断开主LVS的网卡
+客户端访问：http://2.2.2.2/
+在主-从LVS上查看：
+[root@localhost ~]# ipvsadm -Lnc
+在主-从LVS上查看：
+[root@localhost ~]# ip addr show dev eth0
+3、重启主LVS的网卡
+客户端访问：http://2.2.2.2/
+在主-从LVS上查看：
+[root@localhost ~]# ipvsadm -Lnc
+在主-从LVS上查看：
+[root@localhost ~]# ip addr show dev eth0
