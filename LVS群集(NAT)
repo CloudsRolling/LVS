@@ -1,0 +1,60 @@
+----构建NAT模式的LVS群集-----
+-----client---------------LVS----------------WEB1-----------WEB2------------NFS----
+2.2.2.100           eth0:2.2.2.1
+                    eth1:192.168.1.1       192.168.1.10      192.168.1.20     192.168.1.200
+
+一、准备工作
+1、添加模块
+[root@localhost ~]# modprobe ip_vs
+[root@localhost ~]# cat /proc/net/ip_vs
+2、开启路由功能
+[root@localhost ~]# vim /etc/sysctl.conf
+[root@localhost ~]# sysctl -p
+3、设置SNAT
+[root@localhost ~]# iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o eth0 -j SNAT --to-source 2.2.2.1
+4、安装ipvsadm软件
+[root@localhost ~]# rpm -ivh /mnt/Packages/ipvsadm-1.26-2.el6.x86_64.rpm
+二、设置负载调度器
+1、设置负载分配策略
+[root@localhost ~]# service ipvsadm stop
+[root@localhost ~]# ipvsadm -A -t 2.2.2.1:80 -s rr
+[root@localhost ~]# ipvsadm -a -t 2.2.2.1:80 -r 192.168.1.10:80 -m -w 1
+[root@localhost ~]# ipvsadm -a -t 2.2.2.1:80 -r 192.168.1.20:80 -m -w 1
+[root@localhost ~]# service ipvsadm save
+[root@localhost ~]# chkconfig ipvsadm on
+[root@localhost ~]# service ipvsadm start
+三、设置节点服务器
+1、配置web-1服务器
+[root@localhost ~]# echo "welcome to 192.168.1.10 web server" > /var/www/html/index.html
+[root@localhost ~]# service httpd restart
+2、配置web-2服务器
+[root@localhost ~]# echo "welcome to 192.168.1.20 web server" > /var/www/html/index.html
+[root@localhost ~]# service httpd restart
+四、客户端验证：
+1、在客户端访问：
+http://2.2.2.1/
+2、在LVS虚拟服务器查看：
+[root@localhost ~]# ipvsadm -ln
+[root@localhost ~]# ipvsadm -Lnc
+五、配置NFS服务器
+1、配置NFS
+[root@localhost ~]# mkdir /www
+[root@localhost ~]# echo "welcome to XIN LANG web server" >/www/index.html
+[root@localhost ~]# vim /etc/exports
+添加：
+/www 192.168.1.10(rw) 192.168.1.20(ro)
+[root@localhost ~]# service nfs restart
+[root@localhost ~]# showmount -e
+2、在WEB服务器上配置：
+[root@localhost ~]# showmount -e 192.168.1.200
+[root@localhost ~]# mount 192.168.1.200:/www /var/www/html/
+[root@localhost ~]# vim /etc/fstab
+添加：
+192.168.1.200:/www /var/www/html nfs defaults 0 0
+3、验证：
+1、在客户端访问：
+http://2.2.2.1/
+2、在LVS虚拟服务器查看：
+[root@localhost ~]# ipvsadm -ln
+3、关闭一台WEB，在LVS虚拟服务器查看：
+[root@localhost ~]# ipvsadm -ln
